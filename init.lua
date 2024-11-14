@@ -1085,24 +1085,27 @@ require('lazy').setup({
   },
 
   {
-    'catppuccin/nvim',
-    name = 'catppuccin',
-    lazy = false,
-    priority = 1000,
+    'loctvl842/monokai-pro.nvim',
+    -- opts = {
+    --   transparent_background = true,
+    --   filter = 'light',
+    -- },
     config = function()
-      require('catppuccin').setup {
-        dim_inactive = {
-          enabled = true,
-          shade = 'dark',
-          percentage = 0.15,
-        },
-        flavour = 'latte',
-        integrations = {
-          overseer = true,
-        },
+      require('monokai-pro').setup {
         transparent_background = true,
+        filter = 'machine',
       }
-      vim.cmd.colorscheme 'catppuccin'
+      vim.cmd.colorscheme 'monokai-pro'
+    end,
+  },
+
+  {
+    'levouh/tint.nvim',
+    config = function()
+      require('tint').setup {
+        -- tint = -45,
+        -- saturation = 0.6,
+      }
     end,
   },
 
@@ -1187,6 +1190,7 @@ require('lazy').setup({
         'lua',
         'luadoc',
         'markdown',
+        'markdown_inline',
         'matlab',
         'ninja',
         'python',
@@ -1258,7 +1262,8 @@ require('lazy').setup({
 
   {
     'mrcjkb/rustaceanvim',
-    version = '^4', -- Recommended
+    version = '^5', -- Recommended
+    lazy = false,
     ft = { 'rust' },
     opts = {
       server = {
@@ -1436,12 +1441,13 @@ require('lazy').setup({
       { '<leader>moh', '<cmd>MoltenHideOutput<cr>', desc = '[M]olten: [O]utput [H]ide' },
       { '<leader>moe', '<cmd>MoltenEnterOutput<cr>', desc = '[M]olten: [O]utput [E]nter' },
       { '<leader>mi', '<cmd>MoltenInterrupt<cr>', desc = '[M]olten: [I]nterrupt' },
-      { '<leader>mk', '<cmd>MoltenRestart<cr>', desc = '[M]olten: restart [K]ernel' },
+      { '<leader>mr', '<cmd>MoltenRestart<cr>', desc = '[M]olten: [R]estart kernel' },
       { '<leader>mel', '<cmd>MoltenEvaluateLine<cr>', desc = '[M]olten: [E]valuate Cell - [L]ine' },
-      { '<leader>mev', '<cmd><C-u>MoltenEvaluateVisual<cr>gv', mode = { 'v' }, desc = '[M]olten: [E]valuate Cell - [V]isual' },
+      { '<leader>mev', '<cmd>MoltenEvaluateVisual<cr>gv', mode = { 'v' }, desc = '[M]olten: [E]valuate Cell - [V]isual' },
       { '<leader>mer', '<cmd>MoltenReevaluateCell<cr>', desc = '[M]olten: [E]valuate Cell - [R]e-evaluate' },
       { '<leader>mn', '<cmd>MoltenNext<cr>', desc = '[M]olten: Go to [N]ext cell' },
       { '<leader>mp', '<cmd>MoltenPrev<cr>', desc = '[M]olten: Go to [P]revious cell' },
+      { '<leader>mc', 'i```python\n\n```<up>', desc = '[M]olten: new [C]ell' },
     },
   },
 
@@ -1467,19 +1473,29 @@ require('lazy').setup({
 
   {
     'quarto-dev/quarto-nvim',
-    dependencies = { 'jmbuhr/otter.nvim', 'nvim-treesitter/nvim-treesitter' },
+    dependencies = { 'jmbuhr/otter.nvim' },
     ft = { 'quarto', 'markdown' },
     opts = {
-      lspFeatures = {
-        languages = { 'python' },
-        chunks = 'all',
-        diagnostics = { enabled = true, triggers = { 'BufWritePost' } },
-        completion = { enabled = true },
-      },
-      codeRunner = {
-        enabled = true,
-        default_method = 'molten',
-      },
+      config = function()
+        local quarto = require 'quarto'
+        quarto.setup {
+          lspFeatures = {
+            languages = { 'python' },
+            chunk = 'all',
+            diagnostics = { enabled = true, triggers = { 'BufWritePost' } },
+            completion = { enabled = true },
+          },
+          keymap = {
+            hover = 'K',
+            definition = 'gd',
+            references = 'gr',
+          },
+          codeRunner = {
+            enabled = true,
+            default_method = 'molten',
+          },
+        }
+      end,
     },
   },
 
@@ -1499,6 +1515,17 @@ require('lazy').setup({
       output_extension = 'md',
       force_ft = 'markdown',
     },
+  },
+
+  {
+    'hat0uma/csvview.nvim',
+    config = function()
+      require('csvview').setup {
+        view = {
+          display_mode = 'border',
+        },
+      }
+    end,
   },
 
   -- The following comments only work if you have downloaded the kickstart repo, not just copy pasted the
