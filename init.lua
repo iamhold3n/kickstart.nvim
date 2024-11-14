@@ -91,7 +91,7 @@ vim.g.mapleader = ' '
 vim.g.maplocalleader = ' '
 
 -- Set to true if you have a Nerd Font installed and selected in the terminal
-vim.g.have_nerd_font = false
+vim.g.have_nerd_font = true
 
 -- [[ Setting options ]]
 -- See `:help vim.opt`
@@ -157,6 +157,10 @@ vim.opt.cursorline = true
 -- Minimal number of screen lines to keep above and below the cursor.
 vim.opt.scrolloff = 10
 
+vim.opt.expandtab = true
+vim.opt.shiftwidth = 2
+vim.opt.tabstop = 2
+
 -- [[ Basic Keymaps ]]
 --  See `:help vim.keymap.set()`
 
@@ -165,6 +169,7 @@ vim.opt.scrolloff = 10
 vim.keymap.set('n', '<Esc>', '<cmd>nohlsearch<CR>')
 
 -- Diagnostic keymaps
+vim.keymap.set('n', '<leader>e', vim.diagnostic.open_float, { desc = 'Show diagnostic [E]rror messages' })
 vim.keymap.set('n', '<leader>q', vim.diagnostic.setloclist, { desc = 'Open diagnostic [Q]uickfix list' })
 
 -- Exit terminal mode in the builtin terminal with a shortcut that is a bit easier
@@ -215,6 +220,103 @@ if not (vim.uv or vim.loop).fs_stat(lazypath) then
   end
 end ---@diagnostic disable-next-line: undefined-field
 vim.opt.rtp:prepend(lazypath)
+
+local default_notebook = [[
+{
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {},
+      "source": [
+        ""
+      ]
+    }
+  ],
+    "metadata": {
+      "kernelspec": {
+      "display_name": "Python 3",
+      "language": "python",
+      "name": "python3"
+    },
+      "language_info": {
+        "codemirror_mode": {
+          "name": "ipython"
+        },
+        "file_extension": ".py",
+        "mimetype": "text/x-python",
+        "name": "python",
+        "nbconvert_exporter": "python",
+        "pygments_lexer": "ipython3"
+      }
+    },
+    "nbformat": 4,
+    "nbformat_minor": 5
+  }
+]]
+
+local function new_notebook(filename)
+  local path = filename .. '.ipynb'
+  local file = io.open(path, 'w')
+  if file then
+    file:write(default_notebook)
+    file:close()
+    vim.cmd('edit ' .. path)
+  else
+    print 'Error: Could not open new notebook file for writing'
+  end
+end
+
+vim.api.nvim_create_user_command('NewNotebook', function(opts)
+  new_notebook(opts.args)
+end, {
+  nargs = 1,
+  complete = 'file',
+})
+
+local imb = function(e)
+  vim.schedule(function()
+    local kernels = vim.fn.MoltenAvailableKernels()
+    local try_kernel_name = function()
+      local metadata = vim.json.decode(io.open(e.file, 'r'):read 'a')['metadata']
+      return metadata.kernelspec.name
+    end
+    local ok, kernel_name = pcall(try_kernel_name)
+    if not ok or not vim.tbl_contains(kernels, kernel_name) then
+      kernel_name = nil
+      local venv = os.getenv 'VIRTUAL_ENV'
+      if venv ~= nil then
+        kernel_name = string.match(venv, '/.+/(.+)')
+      end
+    end
+    if kernel_name ~= nil and vim.tbl_contains(kernels, kernel_name) then
+      vim.cmd(('MoltenInit %s'):format(kernel_name))
+    end
+    vim.cmd 'MoltenImportOutput'
+  end)
+end
+
+vim.api.nvim_create_autocmd('BufAdd', {
+  pattern = { '*.ipynb' },
+  callback = imb,
+})
+
+vim.api.nvim_create_autocmd('BufEnter', {
+  pattern = { '*.ipynb' },
+  callback = function(e)
+    if vim.api.nvim_get_vvar 'vim_did_enter' ~= 1 then
+      imb(e)
+    end
+  end,
+})
+
+vim.api.nvim_create_autocmd('BufWritePost', {
+  pattern = { '*.ipynb' },
+  callback = function()
+    if require('molten.status').initialized() == 'Molten' then
+      vim.cmd 'MoltenExportOutput!'
+    end
+  end,
+})
 
 -- [[ Configure and install plugins ]]
 --
@@ -316,10 +418,12 @@ require('lazy').setup({
       spec = {
         { '<leader>c', group = '[C]ode', mode = { 'n', 'x' } },
         { '<leader>d', group = '[D]ocument' },
+        { '<leader>m', group = '[M]olten' },
+        { '<leader>me', group = '[M]olten: [E]valuate' },
+        { '<leader>o', group = '[O]verseer' },
         { '<leader>r', group = '[R]ename' },
         { '<leader>s', group = '[S]earch' },
         { '<leader>w', group = '[W]orkspace' },
-        { '<leader>t', group = '[T]oggle' },
         { '<leader>h', group = 'Git [H]unk', mode = { 'n', 'v' } },
       },
     },
@@ -401,6 +505,42 @@ require('lazy').setup({
 
       -- See `:help telescope.builtin`
       local builtin = require 'telescope.builtin'
+      local action_state = require 'telescope.actions.state'
+      local actions = require 'telescope.actions'
+
+      -- extend builtin.buffer to allow deletion of open buffers
+      local buffer_searcher
+      buffer_searcher = function()
+        builtin.buffers {
+          sort_mru = true,
+          ignore_current_buffer = true,
+          show_all_buffers = true,
+          attach_mappings = function(prompt_bufnr, map)
+            local refresh_buffer_searcher = function()
+              actions.close(prompt_bufnr)
+              vim.schedule(buffer_searcher)
+            end
+            local delete_buf = function()
+              local selection = action_state.get_selected_entry()
+              vim.api.nvim_buf_delete(selection.bufnr, { force = true })
+              refresh_buffer_searcher()
+            end
+            local delete_multiple_buf = function()
+              local picker = action_state.get_current_picker(prompt_bufnr)
+              local selection = picker:get_multi_selection()
+              for _, entry in ipairs(selection) do
+                vim.api.nvim_buf_delete(entry.bufnr, { force = true })
+              end
+              refresh_buffer_searcher()
+            end
+            map('n', 'dd', delete_buf)
+            map('n', '<C-d>', delete_multiple_buf)
+            map('i', '<C-d>', delete_multiple_buf)
+            return true
+          end,
+        }
+      end
+
       vim.keymap.set('n', '<leader>sh', builtin.help_tags, { desc = '[S]earch [H]elp' })
       vim.keymap.set('n', '<leader>sk', builtin.keymaps, { desc = '[S]earch [K]eymaps' })
       vim.keymap.set('n', '<leader>sf', builtin.find_files, { desc = '[S]earch [F]iles' })
@@ -410,7 +550,8 @@ require('lazy').setup({
       vim.keymap.set('n', '<leader>sd', builtin.diagnostics, { desc = '[S]earch [D]iagnostics' })
       vim.keymap.set('n', '<leader>sr', builtin.resume, { desc = '[S]earch [R]esume' })
       vim.keymap.set('n', '<leader>s.', builtin.oldfiles, { desc = '[S]earch Recent Files ("." for repeat)' })
-      vim.keymap.set('n', '<leader><leader>', builtin.buffers, { desc = '[ ] Find existing buffers' })
+      -- custom buffer searcher to allow closing open buffers
+      vim.keymap.set('n', '<leader><leader>', buffer_searcher, { desc = '[ ] Find existing buffers' })
 
       -- Slightly advanced example of overriding default behavior and theme
       vim.keymap.set('n', '<leader>/', function()
@@ -576,26 +717,21 @@ require('lazy').setup({
             })
           end
 
-          -- The following code creates a keymap to toggle inlay hints in your
-          -- code, if the language server you are using supports them
-          --
-          -- This may be unwanted, since they displace some of your code
+          -- Always enable inlay hints if available
           if client and client.supports_method(vim.lsp.protocol.Methods.textDocument_inlayHint) then
-            map('<leader>th', function()
-              vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled { bufnr = event.buf })
-            end, '[T]oggle Inlay [H]ints')
+            vim.lsp.inlay_hint.enable(true)
           end
         end,
       })
 
       -- Change diagnostic symbols in the sign column (gutter)
-      -- if vim.g.have_nerd_font then
-      --   local signs = { Error = '', Warn = '', Hint = '', Info = '' }
-      --   for type, icon in pairs(signs) do
-      --     local hl = 'DiagnosticSign' .. type
-      --     vim.fn.sign_define(hl, { text = icon, texthl = hl, numhl = hl })
-      --   end
-      -- end
+      if vim.g.have_nerd_font then
+        local signs = { Error = '', Warn = '', Hint = '', Info = '' }
+        for type, icon in pairs(signs) do
+          local hl = 'DiagnosticSign' .. type
+          vim.fn.sign_define(hl, { text = icon, texthl = hl, numhl = hl })
+        end
+      end
 
       -- LSP servers and clients are able to communicate to each other what features they support.
       --  By default, Neovim doesn't support everything that is in the LSP specification.
@@ -614,18 +750,54 @@ require('lazy').setup({
       --  - settings (table): Override the default settings passed when initializing the server.
       --        For example, to see the options for `lua_ls`, you could go to: https://luals.github.io/wiki/settings/
       local servers = {
-        -- clangd = {},
-        -- gopls = {},
-        -- pyright = {},
-        -- rust_analyzer = {},
+        clangd = {},
+        eslint = {},
+        gopls = {},
+        matlab_ls = {},
+        neocmake = {},
+        omnisharp = {},
+        pyright = {
+          settings = {
+            pyright = {
+              disableOrganizeImports = true,
+              disableTaggedHints = true,
+            },
+            python = {
+              analysis = {
+                diagnosticSeverityOverrides = {
+                  reportUndefinedVariable = 'none',
+                  reportUnusedExpression = 'none',
+                },
+              },
+            },
+          },
+        },
+        ruff = {},
+        svelte = {},
+        taplo = {
+          keys = {
+            {
+              'K',
+              function()
+                if vim.fn.expand '%:t' == 'Cargo.toml' and require('crates').popup_available() then
+                  require('crates').show_popup()
+                else
+                  vim.lsp.buf.hover()
+                end
+              end,
+              desc = 'Show Crate Documentation',
+            },
+          },
+        },
         -- ... etc. See `:help lspconfig-all` for a list of all the pre-configured LSPs
         --
         -- Some languages (like typescript) have entire language plugins that can be useful:
         --    https://github.com/pmizio/typescript-tools.nvim
         --
         -- But for many setups, the LSP (`ts_ls`) will work just fine
-        -- ts_ls = {},
-        --
+        ts_ls = {},
+        volar = {},
+        zls = {},
 
         lua_ls = {
           -- cmd = {...},
@@ -655,6 +827,9 @@ require('lazy').setup({
       -- for you, so that they are available from within Neovim.
       local ensure_installed = vim.tbl_keys(servers or {})
       vim.list_extend(ensure_installed, {
+        'codelldb',
+        'hadolint',
+        'prettier',
         'stylua', -- Used to format Lua code
       })
       require('mason-tool-installer').setup { ensure_installed = ensure_installed }
@@ -671,6 +846,8 @@ require('lazy').setup({
           end,
         },
       }
+
+      require('lspconfig').sourcekit.setup {}
     end,
   },
 
@@ -707,7 +884,20 @@ require('lazy').setup({
         }
       end,
       formatters_by_ft = {
+        css = { 'prettier' },
+        html = { 'prettier' },
+        javascript = { 'prettier' },
+        javascriptreact = { 'prettier' },
+        json = { 'prettier' },
+        jsonc = { 'prettier' },
+        less = { 'prettier' },
         lua = { 'stylua' },
+        markdown = { 'prettier' },
+        scss = { 'prettier' },
+        svelte = { 'prettier' },
+        typescript = { 'prettier' },
+        typescriptreact = { 'prettier' },
+        vue = { 'prettier' },
         -- Conform can also run multiple formatters sequentially
         -- python = { "isort", "black" },
         --
@@ -743,6 +933,15 @@ require('lazy').setup({
           --     require('luasnip.loaders.from_vscode').lazy_load()
           --   end,
           -- },
+        },
+      },
+      {
+        'Saecki/crates.nvim',
+        event = { 'BufRead Cargo.toml' },
+        opts = {
+          completion = {
+            cmp = { enabled = true },
+          },
         },
       },
       'saadparwaiz1/cmp_luasnip',
@@ -825,6 +1024,7 @@ require('lazy').setup({
             -- set group index to 0 to skip loading LuaLS completions as lazydev recommends it
             group_index = 0,
           },
+          { name = 'crates' },
           { name = 'nvim_lsp' },
           { name = 'luasnip' },
           { name = 'path' },
@@ -833,26 +1033,42 @@ require('lazy').setup({
     end,
   },
 
-  { -- You can easily change to a different colorscheme.
-    -- Change the name of the colorscheme plugin below, and then
-    -- change the command in the config to whatever the name of that colorscheme is.
-    --
-    -- If you want to see what colorschemes are already installed, you can use `:Telescope colorscheme`.
-    'folke/tokyonight.nvim',
-    priority = 1000, -- Make sure to load this before all the other start plugins.
-    init = function()
-      -- Load the colorscheme here.
-      -- Like many other themes, this one has different styles, and you could load
-      -- any other, such as 'tokyonight-storm', 'tokyonight-moon', or 'tokyonight-day'.
-      vim.cmd.colorscheme 'tokyonight-night'
-
-      -- You can configure highlights by doing something like:
-      vim.cmd.hi 'Comment gui=none'
+  {
+    'catppuccin/nvim',
+    name = 'catppuccin',
+    lazy = false,
+    priority = 1000,
+    config = function()
+      require('catppuccin').setup {
+        dim_inactive = {
+          enabled = true,
+          shade = 'dark',
+          percentage = 0.15,
+        },
+        flavour = 'latte',
+        integrations = {
+          overseer = true,
+        },
+        transparent_background = true,
+      }
+      vim.cmd.colorscheme 'catppuccin'
     end,
   },
 
   -- Highlight todo, notes, etc in comments
-  { 'folke/todo-comments.nvim', event = 'VimEnter', dependencies = { 'nvim-lua/plenary.nvim' }, opts = { signs = false } },
+  {
+    'folke/todo-comments.nvim',
+    event = 'VimEnter',
+    dependencies = { 'nvim-lua/plenary.nvim' },
+    opts = {
+      keywords = {
+        ACD = { icon = ' ', color = 'error' },
+        BCD = { icon = ' ', color = 'hint' },
+      },
+      merge_keywords = true,
+      signs = false,
+    },
+  },
 
   { -- Collection of various small independent plugins/modules
     'echasnovski/mini.nvim',
@@ -897,7 +1113,48 @@ require('lazy').setup({
     main = 'nvim-treesitter.configs', -- Sets main module to use for opts
     -- [[ Configure Treesitter ]] See `:help nvim-treesitter`
     opts = {
-      ensure_installed = { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc' },
+      ensure_installed = {
+        'asm',
+        'bash',
+        'c',
+        'c_sharp',
+        'cmake',
+        'css',
+        'csv',
+        'diff',
+        'dockerfile',
+        'gleam',
+        'go',
+        'gomod',
+        'gosum',
+        'gowork',
+        'html',
+        'hurl',
+        'javascript',
+        'jsdoc',
+        'json',
+        'lua',
+        'luadoc',
+        'markdown',
+        'matlab',
+        'ninja',
+        'python',
+        'ron',
+        'rst',
+        'rust',
+        'scss',
+        'svelte',
+        'swift',
+        'toml',
+        'typescript',
+        'tsx',
+        'vim',
+        'vimdoc',
+        'vue',
+        'xml',
+        'yaml',
+        'zig',
+      },
       -- Autoinstall languages that are not installed
       auto_install = true,
       highlight = {
@@ -917,6 +1174,292 @@ require('lazy').setup({
     --    - Treesitter + textobjects: https://github.com/nvim-treesitter/nvim-treesitter-textobjects
   },
 
+  {
+    'stevearc/dressing.nvim',
+    lazy = true,
+    init = function()
+      ---@diagnostic disable-next-line: duplicate-set-field
+      vim.ui.select = function(...)
+        require('lazy').load { plugins = { 'dressing.nvim' } }
+        return vim.ui.select(...)
+      end
+      ---@diagnostic disable-next-line: duplicate-set-field
+      vim.ui.input = function(...)
+        require('lazy').load { plugins = { 'dressing.nvim' } }
+        return vim.ui.input(...)
+      end
+    end,
+  },
+
+  {
+    'nvim-lualine/lualine.nvim',
+    opts = {},
+  },
+
+  {
+    'echasnovski/mini.indentscope',
+    version = false,
+    opts = {
+      symbol = '│',
+      options = { try_as_border = true },
+    },
+  },
+
+  {
+    'mrcjkb/rustaceanvim',
+    version = '^4', -- Recommended
+    ft = { 'rust' },
+    opts = {
+      server = {
+        default_settings = {
+          -- rust-analyzer language server configuration
+          ['rust-analyzer'] = {
+            cargo = {
+              allFeatures = false,
+              loadOutDirsFromCheck = true,
+              buildScripts = { enable = true },
+            },
+            -- Add clippy lints for Rust.
+            checkOnSave = true,
+            -- {
+            --   allFeatures = true,
+            --   command = 'clippy',
+            --   extraArgs = { '--no-deps' },
+            -- },
+            procMacro = {
+              enable = true,
+              ignored = {
+                ['async-trait'] = { 'async_trait' },
+                ['napi-derive'] = { 'napi' },
+                ['async-recursion'] = { 'async_recursion' },
+                leptos_macro = { 'component', 'server' },
+              },
+            },
+          },
+        },
+      },
+    },
+    config = function(_, opts)
+      vim.g.rustaceanvim = vim.tbl_deep_extend('keep', vim.g.rustaceanvim or {}, opts or {})
+    end,
+  },
+
+  {
+    'nvim-neotest/neotest',
+    dependencies = { 'nvim-neotest/nvim-nio' },
+    opts = function(_, opts)
+      opts.adapters = opts.adapters or {}
+      vim.list_extend(opts.adapters, {
+        require 'rustaceanvim.neotest',
+      })
+    end,
+  },
+
+  {
+    'vuki656/package-info.nvim',
+    opts = {},
+  },
+
+  { -- Add indentation guides even on blank lines
+    'lukas-reineke/indent-blankline.nvim',
+    -- Enable `lukas-reineke/indent-blankline.nvim`
+    -- See `:help ibl`
+    main = 'ibl',
+    opts = {
+      indent = {
+        char = '│',
+        tab_char = '│',
+      },
+    },
+  },
+
+  {
+    'folke/noice.nvim',
+    event = 'VeryLazy',
+    opts = {
+      lsp = {
+        override = {
+          ['vim.lsp.util.convert_input_to_markdown_lines'] = true,
+          ['vim.lsp.util.stylize_markdown'] = true,
+          ['cmp.entry.get_documentation'] = true,
+        },
+      },
+      routes = {
+        {
+          filter = {
+            event = 'msg_show',
+            any = {
+              { find = '%d+L, %d+B' },
+              { find = '; after #%d+' },
+              { find = '; before #%d+' },
+            },
+          },
+          view = 'mini',
+        },
+      },
+      presets = {
+        bottom_search = true,
+        command_palette = true,
+        long_message_to_split = true,
+        inc_rename = true,
+      },
+    },
+  },
+
+  { 'MunifTanjim/nui.nvim', lazy = true },
+
+  { -- show git blame for highlighted line
+    'braxtons12/blame_line.nvim',
+    config = function()
+      require('blame_line').setup {
+        prefix = ' ',
+      }
+      require('blame_line').enable()
+    end,
+  },
+
+  {
+    '0oAstro/dim.lua',
+    dependencies = { 'nvim-treesitter/nvim-treesitter', 'neovim/nvim-lspconfig' },
+    opts = {
+      disable_lsp_decorations = true,
+    },
+  },
+
+  {
+    'stevearc/overseer.nvim',
+    cmd = {
+      'OverseerOpen',
+      'OverseerClose',
+      'OverseerToggle',
+      'OverseerSaveBundle',
+      'OverseerLoadBundle',
+      'OverseerDeleteBundle',
+      'OverseerRunCmd',
+      'OverseerRun',
+      'OverseerInfo',
+      'OverseerBuild',
+      'OverseerQuickAction',
+      'OverseerTaskAction',
+      'OverseerClearCache',
+    },
+    opts = {
+      dap = false,
+      task_list = {
+        bindings = {
+          ['<C-h>'] = false,
+          ['<C-j>'] = false,
+          ['<C-k>'] = false,
+          ['<C-l>'] = false,
+        },
+      },
+    },
+    keys = {
+      { '<leader>ot', '<cmd>OverseerToggle<cr>', desc = '[O]verseer: [T]oggle window' },
+      { '<leader>or', '<cmd>OverseerRun<cr>', desc = '[O]verseer: [R]un task' },
+      { '<leader>oq', '<cmd>OverseerQuickAction<cr>', desc = '[O]verseer: [Q]uick action recent task' },
+      { '<leader>oi', '<cmd>OverseerInfo<cr>', desc = '[O]verseer: [I]nfo' },
+      { '<leader>ob', '<cmd>OverseerBuild<cr>', desc = '[O]verseer: Task [B]uilder' },
+      { '<leader>oa', '<cmd>OverseerTaskAction<cr>', desc = '[O]verseer: Task [A]ction' },
+      { '<leader>oc', '<cmd>OverseerClearCache<cr>', desc = '[O]verseer: [C]lear cache' },
+    },
+    -- },
+  },
+
+  {
+    'benlubas/molten-nvim',
+    version = '^1.0.0',
+    dependencies = { '3rd/image.nvim' },
+    build = ':UpdateRemotePlugins',
+    init = function()
+      vim.g.molten_auto_open_output = false
+      vim.g.molten_image_location = 'virt'
+      vim.g.molten_image_provider = 'image.nvim'
+      vim.g.molten_output_win_max_height = 20
+      vim.g.molten_virt_lines_off_by_1 = true
+      vim.g.molten_virt_text_output = true
+      vim.g.molten_wrap_output = true
+    end,
+    keys = {
+      { '<leader>mos', '<cmd>MoltenShowOutput<cr>', desc = '[M]olten: [O]utput [S]how' },
+      { '<leader>moh', '<cmd>MoltenHideOutput<cr>', desc = '[M]olten: [O]utput [H]ide' },
+      { '<leader>moe', '<cmd>MoltenEnterOutput<cr>', desc = '[M]olten: [O]utput [E]nter' },
+      { '<leader>mi', '<cmd>MoltenInterrupt<cr>', desc = '[M]olten: [I]nterrupt' },
+      { '<leader>mr', '<cmd>MoltenRestart<cr>', desc = '[M]olten: [R]estart kernel' },
+      { '<leader>mel', '<cmd>MoltenEvaluateLine<cr>', desc = '[M]olten: [E]valuate Cell - [L]ine' },
+      { '<leader>mev', '<cmd><C-u>MoltenEvaluateVisual<cr>gv', mode = { 'v' }, desc = '[M]olten: [E]valuate Cell - [V]isual' },
+      { '<leader>mer', '<cmd>MoltenReevaluateCell<cr>', desc = '[M]olten: [E]valuate Cell - [R]e-evaluate' },
+      { '<leader>mn', '<cmd>MoltenNext<cr>', desc = '[M]olten: Go to [N]ext cell' },
+      { '<leader>mp', '<cmd>MoltenPrev<cr>', desc = '[M]olten: Go to [P]revious cell' },
+    },
+  },
+
+  {
+    '3rd/image.nvim',
+    opts = {
+      config = function()
+        local image = require 'image'
+        image.setup {
+          backend = 'kitty',
+          integrations = {},
+          kitty_method = 'unicode-placeholders',
+          max_width = 100,
+          max_height = 12,
+          max_height_window_percentage = math.huge,
+          max_width_window_percentage = math.huge,
+          window_overlap_clear_enabled = true,
+          window_overlap_clear_ft_ignore = { 'cmp_menu', 'cmp_docs', '' },
+        }
+      end,
+    },
+  },
+
+  {
+    'quarto-dev/quarto-nvim',
+    dependencies = { 'jmbuhr/otter.nvim' },
+    ft = { 'quarto', 'markdown' },
+    opts = {
+      config = function()
+        local quarto = require 'quarto'
+        quarto.setup {
+          lspFeatures = {
+            languages = { 'python' },
+            chunk = 'all',
+            diagnostics = { enabled = true, triggers = { 'BufWritePost' } },
+            completion = { enabled = true },
+          },
+          keymap = {
+            hover = 'K',
+            definition = 'gd',
+            references = 'gr',
+          },
+          codeRunner = {
+            enabled = true,
+            default_method = 'molten',
+          },
+        }
+      end,
+    },
+  },
+
+  {
+    'jmbuhr/otter.nvim',
+    dependencies = { 'nvim-treesitter/nvim-treesitter' },
+    opts = {},
+  },
+
+  {
+    'GCBallesteros/jupytext.nvim',
+    config = true,
+    ft = { 'ipynb' },
+    lazy = false,
+    opts = {
+      style = 'markdown',
+      output_extension = 'md',
+      force_ft = 'markdown',
+    },
+  },
+
   -- The following comments only work if you have downloaded the kickstart repo, not just copy pasted the
   -- init.lua. If you want these files, they are in the repository, so you can just download them and
   -- place them in the correct locations.
@@ -926,7 +1469,7 @@ require('lazy').setup({
   --  Here are some example plugins that I've included in the Kickstart repository.
   --  Uncomment any of the lines below to enable them (you will need to restart nvim).
   --
-  -- require 'kickstart.plugins.debug',
+  require 'kickstart.plugins.debug',
   -- require 'kickstart.plugins.indent_line',
   -- require 'kickstart.plugins.lint',
   -- require 'kickstart.plugins.autopairs',
