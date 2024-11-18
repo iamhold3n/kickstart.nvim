@@ -1385,7 +1385,7 @@ require('lazy').setup({
       { '<leader>moh', '<cmd>MoltenHideOutput<cr>', desc = '[M]olten: [O]utput [H]ide' },
       { '<leader>moe', '<cmd>MoltenEnterOutput<cr>', desc = '[M]olten: [O]utput [E]nter' },
       { '<leader>mi', '<cmd>MoltenInterrupt<cr>', desc = '[M]olten: [I]nterrupt' },
-      { '<leader>mr', '<cmd>MoltenRestart<cr>', desc = '[M]olten: [R]estart kernel' },
+      { '<leader>mk', '<cmd>MoltenRestart<cr>', desc = '[M]olten: restart [K]ernel' },
       { '<leader>mel', '<cmd>MoltenEvaluateLine<cr>', desc = '[M]olten: [E]valuate Cell - [L]ine' },
       { '<leader>mev', '<cmd><C-u>MoltenEvaluateVisual<cr>gv', mode = { 'v' }, desc = '[M]olten: [E]valuate Cell - [V]isual' },
       { '<leader>mer', '<cmd>MoltenReevaluateCell<cr>', desc = '[M]olten: [E]valuate Cell - [R]e-evaluate' },
@@ -1416,29 +1416,19 @@ require('lazy').setup({
 
   {
     'quarto-dev/quarto-nvim',
-    dependencies = { 'jmbuhr/otter.nvim' },
+    dependencies = { 'jmbuhr/otter.nvim', 'nvim-treesitter/nvim-treesitter' },
     ft = { 'quarto', 'markdown' },
     opts = {
-      config = function()
-        local quarto = require 'quarto'
-        quarto.setup {
-          lspFeatures = {
-            languages = { 'python' },
-            chunk = 'all',
-            diagnostics = { enabled = true, triggers = { 'BufWritePost' } },
-            completion = { enabled = true },
-          },
-          keymap = {
-            hover = 'K',
-            definition = 'gd',
-            references = 'gr',
-          },
-          codeRunner = {
-            enabled = true,
-            default_method = 'molten',
-          },
-        }
-      end,
+      lspFeatures = {
+        languages = { 'python' },
+        chunks = 'all',
+        diagnostics = { enabled = true, triggers = { 'BufWritePost' } },
+        completion = { enabled = true },
+      },
+      codeRunner = {
+        enabled = true,
+        default_method = 'molten',
+      },
     },
   },
 
